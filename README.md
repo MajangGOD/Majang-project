@@ -1,0 +1,2 @@
+# Majang-project
+MajangGOD project

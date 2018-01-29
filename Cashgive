@@ -1,0 +1,504 @@
+<?php
+
+namespace Cashgive;
+
+use pocketmine\plugin\PluginBase;
+use pocketmine\event\player\PlayerMoveEvent;
+use pocketmine\event\Listener;
+use pocketmine\utils\Config;
+use pocketmine\scheduler\Task;
+use pocketmine\event\player\PlayerChatEvent;
+use pocketmine\Player;
+use pocketmine\Server;
+use pocketmine\event\player\PlayerDeathEvent;
+use pocketmine\event\entity\EntityDamageByEntityEvent;
+use pocketmine\event\entity\EntityDamageByChildEntityEvent;
+use pocketmine\event\entity\EntityDamageEvent;
+use pocketmine\event\entity\EntityDeathEvent;
+use onebone\economyapi\EconomyAPI;
+use pocketmine\math\Vector3;
+use pocketmine\level\Position;
+use pocketmine\command\Command;
+use pocketmine\item\Item;
+use pocketmine\command\CommandSender;
+use pocketmine\event\player\PlayerToggleSneakEvent;
+use pocketmine\entity\Effect;
+use pocketmine\level\particle\HeartParticle;
+use pocketmine\level\Level;
+use pocketmine\event\player\PlayerItemHeldEvent;
+use pocketmine\event\block\BlockBreakEvent;
+use pocketmine\event\block\BlockPlaceEvent;
+use pocketmine\utils\TextFormat;
+use pocketmine\event\player\PlayerJoinEvent;
+use pocketmine\block\Block;
+
+class Cashgive extends PluginBase implements Listener {
+    private $jump = [ ];
+    public function onEnable() {
+        @mkdir ( $this->getDataFolder () );
+        $this->majangConfig = new Config ($this->getDataFolder () . "cash.yml", Config::YAML, ["cash-player" => [ ]]);
+        $this->majang = $this->majangConfig->getAll ();
+        @mkdir ( $this->getDataFolder () );
+        $this->settingData = (new Config($this->getDataFolder() . "setting.yml", Config::YAML, ["석유-블럭" => 12, "석유-블럭-데미지" => 0, "석유-월드" => "world"]));
+        $this->settingDB = $this->settingData->getAll();
+        $this->getServer()->loadLevel($this->settingDB["석유-월드"]);
+        $this->getServer ()->getPluginManager ()->registerEvents ( $this, $this );
+    }
+    public function onCommand(CommandSender $player, Command $command, string $label, array $args):bool{
+        $tag = "§6§l[ §f후원자  §6]";
+        switch ($command->getName ()) {
+            case "후원자" :
+                $name = $player->getName();
+                if(!isset($args[0])){
+                    $player->sendMessage($tag . " §f/후원자 도움말");
+                    return true;
+                }
+                switch ($args[0]) {
+                    case "권한추가" :
+                        if (! $player->isOp ()) {
+                            $player->sendMessage ( $tag. "권한이 없습니다." );
+                            return true;
+                        }
+                        if (!isset($args[1])){
+                            $player->sendMessage($tag . " §f/후원자 권한추가 <플레이어>");
+                            return true;
+                        }
+                        if (isset($this->majang [strtolower($args[1])])) {
+                            $player->sendMessage ($tag . " §f해당 플레이어는 이미 권한이 있습니다");
+                            return true;
+                        } else {
+                            array_push($this->majang ["cash-player"], strtolower($args[1]));
+                            $this->majang [strtolower($args[1])] = [strtolower($name)];
+                            $player->sendMessage ($tag . " §f". $args[1] ."님에게 권한을 지급했습니다");
+                        }
+                        break;
+                        
+                    case "권한해지" :
+                        if (! $player->isOp ()) {
+                            $player->sendMessage ( $tag. "권한이 없습니다." );
+                            return true;
+                        }
+                        if (!isset($args[1])){
+                            $player->sendMessage($tag . " §f/후원자 권한해지 <플레이어>");
+                            return true;
+                        }
+                        if (!isset($this->majang [strtolower($args[1])])) {
+                            $player->sendMessage ($tag . " §f해당 플레이어는 후원 권한이 없습니다");
+                            return true;
+                        } else {
+                            
+                            unset ($this->majang ["cash-player"] [array_search(strtolower($args[1]), $this->majang ["cash-player"])]);
+                            
+                            unset ($this->majang [strtolower($args[1])]);
+                            
+                            $player->sendMessage ($tag . " §f". $args[1] ."님을 권한을 해지했습니다");
+                        }
+                        $player->sendMessage($tag . " §c권한을 해지당했습니다");
+                        break;
+                        
+                    case "목록" :
+                        foreach ($this->majang ["cash-player"] as $cashlist){
+                            $player->sendMessage("§6 ---- 목록 ----\n {$cashlist} ");
+                            return true;
+                        }
+                        break;
+                    case "도움말" :
+                        $this->userMsg ($player);
+                        break;
+                }
+                return true;
+        }
+    }
+    public function userMsg($player) {
+        $tag = "§6§l[ §f후원  §6]";
+        if(!$player->isOp()){
+            $player->sendMessage($tag ." §f/후원자 도움말 - 후원 명령어를 확인합니다");
+            $player->sendMessage($tag ." §f/후원자 목록 - 후원 권한 가진 플레이어들을 확인합니다");
+        }
+        if($player->isOp()){
+            $player->sendMessage($tag ." §f/후원자 도움말 - 후원 명령어를 확인합니다");
+            $player->sendMessage($tag ." §f/후원자 목록 - 후원 권한을 가진 플레이어들을 확인합니다");
+            $player->sendMessage($tag ." §f/후원자 권한추가 <플레이어> - 후원 권한을 지급합니다");
+            $player->sendMessage($tag ." §f/후원자 권한해지 <플레이어> - 후원 권한을 권한해지 지급합니다");
+        }
+    }
+    
+    public function PlayerInteract(BlockBreakEvent $event) {
+        $player = $event->getPlayer ();
+        $world = $player->getLevel()->getName();
+        if (!isset($this->majang [strtolower($player->getName())])){
+            return true;
+        }else{
+        if ($world == $this->settingDB["석유-월드"]){
+            $inventory = $player->getInventory ();
+            if($event-> getBlock ()->getId () == $this->settingDB["석유-블럭"] && $event->getBlock ()->getDamage () == $this->settingDB["석유-블럭-데미지"]){
+                switch(mt_rand(0,70)){
+                    case 0:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 1:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 2:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        break;
+                    case 3:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 4:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 5:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        break;
+                    case 6:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 7:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 8:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        break;
+                    case 9:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 10:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 11:
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        break;
+                    case 12:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 13:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 14:
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        break;
+                    case 15:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 16:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 17:
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        break;
+                    case 18:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 19:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 20:
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        break;
+                    case 21:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 22:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 23:
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        break;
+                    case 24:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 25:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 26:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 27:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 28:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 29:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 30:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 31:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 32:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 33:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 34:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 35:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 36:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 37:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 38:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 39:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 40:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 41:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 42:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 43:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 44:
+                        $player->sendMessage(" §b§l[§f석유농장§b]§f 하늘색석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §b§l[§f석유농장§b]§f 가격 :§b 300원 ");
+                        $player->sendMessage(" §b§l[§f석유농장§b]§f /석유농장 - 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$player->getName()} 님§b 하늘색석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 3, 1 ));
+                        break;
+                    case 45:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 기계가 고장났네.. 다시해보자");
+                        
+                        break;
+                    case 46:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네.. 다시해보자");
+                        
+                        break;
+                    case 47:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 48:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 가격 :§6 20원 ");
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유농장에서 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$playerer->getName()} 님§7 석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 15, 1 ));
+                        break;
+                    case 49:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 가격 :§6 20원 ");
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유농장에서 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$player->getName()} 님§7 석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 15, 1 ));
+                        break;
+                    case 50:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 독에걸렸다 ");
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 51:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 가격 :§6 20원 ");
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유농장에서 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$player->getName()} 님§7 석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 15, 1 ));
+                        break;
+                    case 52:
+                        $player->sendMessage(" §6§l[§f석유농장§e]§f 노란석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §6§l[§f석유농장§e]§f 가격 :§e 20원 ");
+                        $player->sendMessage(" §6§l[§f석유농장§e]§f /석유농장 - 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$plyer->getName()} 님§e 노란석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 4, 1 ));
+                        break;
+                    case 53:
+                        $player->sendMessage(" §e§l[§f석유농장§e]§f 노란석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §e§l[§f석유농장§e]§f 가격 :§e 20원 ");
+                        $player->sendMessage(" §e§l[§f석유농장§e]§f /석유농장 - 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$player->getName()} 님§e 노란석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 4, 1 ));
+                        break;
+                    case 54:
+                        $player->sendMessage(" §b§l[§f석유농장§b]§f 하늘색석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §b§l[§f석유농장§b]§f 가격 :§b 300원 ");
+                        $player->sendMessage(" §b§l[§f석유농장§b]§f /석유농장 - 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$player->getName()} 님§b 하늘색석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 3, 1 ));
+                        break;
+                    case 55:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 실명이다 ");
+                        $player->addEffect(Effect::getEffect(15)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 56:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 실명이다 ");
+                        $player->addEffect(Effect::getEffect(15)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 57:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 실명이다 ");
+                        $player->addEffect(Effect::getEffect(15)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 58:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 실명이다 ");
+                        $player->addEffect(Effect::getEffect(15)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 59:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 실명이다 ");
+                        $player->addEffect(Effect::getEffect(15)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 60:
+                        $player->sendMessage(" §b§l[§f석유농장§b]§f 하늘색석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §b§l[§f석유농장§b]§f 가격 :§b 300원 ");
+                        $player->sendMessage(" §b§l[§f석유농장§b]§f /석유농장 - 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$player->getName()} 님§b 하늘색석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 3, 1 ));
+                        break;
+                    case 61:
+                        $player->sendMessage("§ㄴ");
+                        $player->sendMessage(" §c§l[§f석유농장§c]§c 빨간석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §c§l[§f석유농장§c]§f 가격 :§c 50원 ");
+                        $player->sendMessage(" §c§l[§f석유농장§c]§f /석유농장 - 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$player->getName()} 님§c 빨간색석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 14, 1 ));
+                        break;
+                    case 62:
+                        $player->sendMessage("§ㄴ");
+                        $player->sendMessage(" §c§l[§f석유농장§c]§c 빨간석유를 §f확득하셨습니다");
+                        $player->sendMessage(" §c§l[§f석유농장§c]§f 가격 :§c 50원 ");
+                        $player->sendMessage(" §c§l[§f석유농장§c]§f /석유농장 - 판매를 해보세요");
+                        $this->getServer()->broadcastTip("§f {$plyaer->getName()} 님§c 빨간색석유§f 획득 ! ");
+                        $inventory->addItem ( Item::get ( 237, 14, 1 ));
+                        break;
+                    case 63:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 실명이다 ");
+                        $player->addEffect(Effect::getEffect(20)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 64:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 땅에 오래 있어서 멀미에걸렸다 ");
+                        $player->addEffect(Effect::getEffect(9)->setDuration(20*10)->setAmplifier(1));
+                        break;
+                    case 65:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네");
+                        
+                        break;
+                    case 66:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네");
+                        
+                        break;
+                    case 67:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네");
+                        
+                        break;
+                    case 68:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네");
+                        
+                        break;
+                    case 69:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네");
+                        
+                        break;
+                    case 70:
+                        $player->sendMessage(" §6§l[§f석유농장§6]§f 석유인줄 알았더니 흙탕물이네");
+                        
+                        break;
+                }
+            }
+        }
+    }
+}
+
+public function makeTimestamp() {
+    $date = date ( "Y-m-d H:i:s" );
+    $yy = substr ( $date, 0, 4 );
+    $mm = substr ( $date, 5, 2 );
+    $dd = substr ( $date, 8, 2 );
+    $hh = substr ( $date, 11, 2 );
+    $ii = substr ( $date, 14, 2 );
+    $ss = substr ( $date, 17, 2 );
+    return mktime ( $hh, $ii, $ss, $mm, $dd, $yy );
+} // 타임스탬프
+public function HeartParticle(Player $player){
+    $px=$player->x;
+    $py=$player->y;
+    $pz=$player->z; 
+    for($i=0;$i<5;$i++){
+        $sin=sin($i/5*M_PI);
+        $cos=cos($i/5*M_PI);
+        $particle = new HeartParticle(new Vector3($px+$sin*5,$py+5,$pz+$cos*5));
+        $player->getLevel()->addParticle($particle);
+    }
+}
+public function onJump(PlayerToggleSneakEvent $event){
+    $player = $event->getPlayer();
+    $name = $player->getName();
+    $tag = "§6§l[§f f후원 §6]§f";
+    if (!isset($this->majang [strtolower($player->getName())])){
+        return true;
+    }else {
+        if ( isset ( $this->jump [$name] )) { // 처음 치는게 아니면?
+            if ($this->makeTimestamp () - $this->jump [$name] < 30) {
+                $cool = 30 - ( $this->makeTimestamp() - $this->jump [$name] );
+                $player->sendTip ( $tag. " {$cool}" );
+                return true;
+            }
+        }
+        $this->jump [$name] = $this->makeTimestamp (); // 4보다 크면 ? 지금 초 단위 시간을 기록
+        $player->sendTitle($tag . " 높은 점프!");
+        $player->setMotion(new Vector3(0, 1, 0));
+        $this->HeartParticle($player);
+    }
+}
+public function onDisable() {
+    $this->saveDB();
+}
+public function saveDB() {
+    $this->majangConfig->setAll ( $this->majang );
+    $this->majangConfig->save ();
+}
+}
